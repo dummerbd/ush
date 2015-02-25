@@ -27,12 +27,14 @@ void init_cmd_list(cmd_t *cmd_list);
 int build_cmd_list(cmd_t *cmd_list, char *cmd_line);
 void eval_cmd_list(cmd_t *cmd_list);
 void clear_cmd_list(cmd_t *cmd_list);
+int cmd_list_len(cmd_t *cmd_list);
 int is_valid_cmd(char *cmd_name);
+pid_t safe_fork();
 void unix_error(char *msg);
 void app_error(char *msg);
 
-
 const char *WHICH_CMD = "which 2>/dev/null ";
+
 
 int main()
 {
@@ -48,6 +50,8 @@ int main()
 
         if ((fgets(cmd_line, MAX_LINE, stdin) == NULL) && ferror(stdin))
             app_error("fgets error");
+
+        cmd_line[strlen(cmd_line) - 1] = '\0';
 
         if (feof(stdin))
         {
@@ -124,9 +128,10 @@ int build_cmd_list(cmd_t *cmd_list, char *cmd_line)
 
             case 1: // cmd name
                 cmd = cmd_list + cmd_i;
-                cmd_i++;
-                arg_i = 0;
                 cmd->cmd_name = tok;
+                cmd->cmd_argv[0] = tok;
+                cmd_i++;
+                arg_i = 1;
 
                 if (cmd_i > MAX_CMDS)
                 {
@@ -164,19 +169,30 @@ int build_cmd_list(cmd_t *cmd_list, char *cmd_line)
  */
 void eval_cmd_list(cmd_t *cmd_list)
 {
-    int i, j;
-    for (i = 0; i < MAX_ARGS; i++)
+    //int cmd_i;
+    pid_t child_pid;
+
+    // initial fork, this child process will parent all command execs
+    child_pid = safe_fork();
+    if (child_pid == 0)
     {
-        if (cmd_list[i].cmd_name == NULL)
-            return;
-        printf("Command %s\n", cmd_list[i].cmd_name);
-        for (j = 0; j < MAX_ARGS; j++)
-        {
-            if (cmd_list[i].cmd_argv[j] == NULL)
-                break;
-            printf("\t%s\n", cmd_list[i].cmd_argv[j]);
-        }
+        execvp(cmd_list[0].cmd_name, cmd_list[0].cmd_argv);
     }
+    else
+        waitpid(child_pid, NULL, 0);
+}
+
+/*
+ * Returns the number of commands in the command list.
+ */
+int cmd_list_len(cmd_t *cmd_list)
+{
+    int len;
+
+    for (len = 0; len < MAX_CMDS; len++)
+        if (cmd_list[len].cmd_name == NULL)
+            break;
+    return len;
 }
 
 /*
@@ -202,6 +218,14 @@ int is_valid_cmd(char *cmd_name)
     pclose(p);
 
     return 1;
+}
+
+pid_t safe_fork()
+{
+    pid_t p = fork();
+    if (p < 0)
+        unix_error("fork error");
+    return p;
 }
 
 void unix_error(char *msg)
