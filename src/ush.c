@@ -26,6 +26,8 @@ typedef struct
 void init_cmd_list(cmd_t *cmd_list);
 int build_cmd_list(cmd_t *cmd_list, char *cmd_line);
 void eval_cmd_list(cmd_t *cmd_list);
+void eval_cmd_child(cmd_t *cmd_list, int num_pipes);
+void exec_cmd(cmd_t cmd, int* pipe_in, int* pipe_out);
 void clear_cmd_list(cmd_t *cmd_list);
 int cmd_list_len(cmd_t *cmd_list);
 int is_valid_cmd(char *cmd_name);
@@ -81,7 +83,7 @@ void init_cmd_list(cmd_t *cmd_list)
         cmd_list[i].cmd_name = NULL;
         cmd_list[i].cmd_argv = (char **)calloc(MAX_ARGS, sizeof(char *));
         if (cmd_list[i].cmd_argv == NULL)
-            unix_error("Could not allocate memory.");
+            unix_error("alloc failed\n");
     }
 }
 
@@ -169,17 +171,57 @@ int build_cmd_list(cmd_t *cmd_list, char *cmd_line)
  */
 void eval_cmd_list(cmd_t *cmd_list)
 {
-    //int cmd_i;
     pid_t child_pid;
 
-    // initial fork, this child process will parent all command execs
     child_pid = safe_fork();
     if (child_pid == 0)
-    {
-        execvp(cmd_list[0].cmd_name, cmd_list[0].cmd_argv);
-    }
+        eval_cmd_child(cmd_list, cmd_list_len(cmd_list) - 1);
     else
         waitpid(child_pid, NULL, 0);
+}
+
+/*
+ * Manages pipes and forking off child processes to handle each
+ * command.
+ */
+void eval_cmd_child(cmd_t *cmd_list, int num_pipes)
+{
+    int cmd_i;
+    int *in_pipe;
+    int pipes[num_pipes][2];
+
+    for (cmd_i = 0; cmd_i < num_pipes; cmd_i++)
+        pipe(pipes[cmd_i]);
+
+    for (cmd_i = 0; cmd_i < num_pipes; cmd_i++)
+    {
+        if (safe_fork() == 0)
+        {
+            in_pipe = cmd_i > 0 ? pipes[cmd_i - 1] : NULL;
+            exec_cmd(cmd_list[cmd_i], in_pipe, pipes[cmd_i]);
+        }
+    }
+    in_pipe = num_pipes > 0 ? pipes[num_pipes - 1] : NULL;
+    exec_cmd(cmd_list[cmd_i], in_pipe, NULL);
+}
+
+void exec_cmd(cmd_t cmd, int* pipe_in, int* pipe_out)
+{
+    if (pipe_in != NULL)
+    {
+        close(pipe_in[0]);
+        close(0);
+        dup(pipe_in[1]);
+        close(pipe_in[1]);
+    }
+    if (pipe_out != NULL)
+    {
+        close(pipe_out[1]);
+        close(1);
+        dup(pipe_out[0]);
+        close(pipe_in[0]);
+    }
+    execvp(cmd.cmd_name, cmd.cmd_argv);
 }
 
 /*
@@ -224,7 +266,7 @@ pid_t safe_fork()
 {
     pid_t p = fork();
     if (p < 0)
-        unix_error("fork error");
+        unix_error("fork failed\n");
     return p;
 }
 
