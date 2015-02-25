@@ -11,25 +11,28 @@
 #include <string.h>
 #include <sys/wait.h>
 
-#define MAXLINE 1024
-#define MAXCMDS 64
-#define MAXARGS 256
+#define MAX_LINE 1024
+#define MAX_CMDS 64
+#define MAX_ARGS 256
+#define PIPE_CHAR '|'
 
 void unix_error(char *msg);
 void app_error(char *msg);
 void eval_cmd(char *cmdline);
-int expand_cmd_path(char *cmdname, int size);
+int is_valid_cmd(char *cmdname);
+
+const char *WHICH_CMD = "which 2>/dev/null ";
 
 int main()
 {
-    char cmdline[MAXLINE];
+    char cmdline[MAX_LINE];
     
     while (1)
     {
         printf("ush> ");
         fflush(stdout);
 
-        if ((fgets(cmdline, MAXLINE, stdin) == NULL) && ferror(stdin))
+        if ((fgets(cmdline, MAX_LINE, stdin) == NULL) && ferror(stdin))
             app_error("fgets error");
 
         if (feof(stdin))
@@ -48,29 +51,42 @@ int main()
 
 void eval_cmd(char *cmdline)
 {
-    
+    int i = 0;
     char *tok = strtok(cmdline, " ");
     while (tok != NULL)
     {
-        // do stuff here...        
+        if (i == 0 && !is_valid_cmd(tok))
+            printf("Command good!\n");
+        else if (i > 0)
+            printf("\t%s\n", tok);
+
         tok = strtok(NULL, " ");
+        i++;
     }
 }
 
-int expand_cmd_path(char *cmdname, int size)
+/*
+ * Check that the cmdname is in PATH and that the current user has
+ * priveleges to execute it.
+ * Returns -1 on error, 0 on success.
+ */
+int is_valid_cmd(char *cmdname)
 {
-    char str[256];
-    char *cmd = "which 2>/dev/null ";
-    strcpy(str, cmd);
-    strncpy(str + strlen(cmd), cmdname, sizeof(str) - strlen(cmd));
-    FILE *p = popen(str, "r");
-    if (fgets(cmdname, size, p) == NULL)
+    char which_cmd[256];
+    char buf[256];
+    FILE *p;
+
+    strcpy(which_cmd, WHICH_CMD);
+    strncpy(which_cmd + strlen(WHICH_CMD), cmdname, sizeof(which_cmd) - strlen(WHICH_CMD));
+    
+    p = popen(which_cmd, "r");
+    if (fgets(buf, sizeof(buf), p) == NULL)
     {
-        pclose(p);
+        printf("Error: command not found\n");
         return -1;
     }
-    cmdname[strlen(cmdname) - 1] = '\0';
     pclose(p);
+
     return 0;
 }
 
