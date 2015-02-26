@@ -27,11 +27,12 @@ void init_cmd_list(cmd_t *cmd_list);
 int build_cmd_list(cmd_t *cmd_list, char *cmd_line);
 void eval_cmd_list(cmd_t *cmd_list);
 void eval_cmd_child(cmd_t *cmd_list, int num_pipes);
-void exec_cmd(cmd_t cmd, int* pipe_in, int* pipe_out);
+void exec_cmd(cmd_t cmd, int *fds, int fds_len, int in_idx, int out_idx);
 void clear_cmd_list(cmd_t *cmd_list);
 int cmd_list_len(cmd_t *cmd_list);
 int is_valid_cmd(char *cmd_name);
 pid_t safe_fork();
+void safe_pipe(int* fds);
 void unix_error(char *msg);
 void app_error(char *msg);
 
@@ -186,42 +187,54 @@ void eval_cmd_list(cmd_t *cmd_list)
  */
 void eval_cmd_child(cmd_t *cmd_list, int num_pipes)
 {
-    int cmd_i;
-    int *in_pipe;
-    int pipes[num_pipes][2];
+    pid_t pid, pgid;
+    int i, p_idx;
+    int pipes[num_pipes * 2];
 
-    for (cmd_i = 0; cmd_i < num_pipes; cmd_i++)
-        pipe(pipes[cmd_i]);
+    pgid = getpid();
 
-    for (cmd_i = 0; cmd_i < num_pipes; cmd_i++)
+    for (i = 0; i < num_pipes * 2; i += 2)
+        safe_pipe(pipes + i);
+
+    p_idx = -2;
+    for (i = 0; i < num_pipes; i++)
     {
-        if (safe_fork() == 0)
+        pid = safe_fork();
+        if (pid == 0)
+            exec_cmd(cmd_list[i], pipes, num_pipes * 2, p_idx, p_idx + 3);
+        else
         {
-            in_pipe = cmd_i > 0 ? pipes[cmd_i - 1] : NULL;
-            exec_cmd(cmd_list[cmd_i], in_pipe, pipes[cmd_i]);
+            if (i == 0)
+                pgid = pid;
+            setpgid(pid, pgid);
         }
+        p_idx += 2;
     }
-    in_pipe = num_pipes > 0 ? pipes[num_pipes - 1] : NULL;
-    exec_cmd(cmd_list[cmd_i], in_pipe, NULL);
+    setpgid(0, pgid);
+    exec_cmd(cmd_list[i], pipes, num_pipes * 2, p_idx, -1);
 }
 
-void exec_cmd(cmd_t cmd, int* pipe_in, int* pipe_out)
+/*
+ * Redirects stdin and stdout based on in_idx and out_idx, which are
+ * indexes in fds. If either of these indexes is less than 0 then no
+ * redirection will occur. The fds array should contain open file
+ * descriptors and fd_len should be the number of elements in fds.
+ * Finally, the cmd is executed using exec, this function will not
+ * return on success, and will exit on failure.
+ */
+void exec_cmd(cmd_t cmd, int *fds, int fd_len, int in_idx, int out_idx)
 {
-    if (pipe_in != NULL)
-    {
-        close(pipe_in[0]);
-        close(0);
-        dup(pipe_in[1]);
-        close(pipe_in[1]);
-    }
-    if (pipe_out != NULL)
-    {
-        close(pipe_out[1]);
-        close(1);
-        dup(pipe_out[0]);
-        close(pipe_in[0]);
-    }
+    int i;
+
+    if (in_idx >= 0)
+        dup2(fds[in_idx], 0);
+    if (out_idx >= 0)
+        dup2(fds[out_idx], 1);
+    for (i = 0; i < fd_len; i++)
+        close(fds[i]);
+
     execvp(cmd.cmd_name, cmd.cmd_argv);
+    unix_error("exec failed");
 }
 
 /*
@@ -262,6 +275,9 @@ int is_valid_cmd(char *cmd_name)
     return 1;
 }
 
+/*
+ * Calls normal fork but safely exits on failure.
+ */
 pid_t safe_fork()
 {
     pid_t p = fork();
@@ -270,12 +286,28 @@ pid_t safe_fork()
     return p;
 }
 
+/*
+ * Calls normal pipe but safely exits on failure.
+ */
+void safe_pipe(int* fds)
+{
+    if (pipe(fds) == -1)
+        unix_error("pipe failed\n");
+}
+
+/*
+ * Prints an error message along with the message of the last system
+ * error and exits.
+ */
 void unix_error(char *msg)
 {
     fprintf(stdout, "%s: %s\n", msg, strerror(errno));
     exit(1);
 }
 
+/*
+ * Prints an error message and exits.
+ */
 void app_error(char *msg)
 {
     fprintf(stdout, "%s\n", msg);
